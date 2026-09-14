@@ -1,0 +1,47 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    env: str = "development"
+    host: str = "0.0.0.0"
+    port: int = 8000
+    client_url: str = "http://localhost:5173"
+
+    mongodb_uri: str = "mongodb://localhost:27017"
+    mongodb_db: str = "interviewlab"
+
+    jwt_secret: str = "interviewlab-local-secret-change-before-prod"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24 * 7
+
+    invite_link_base_url: str = "http://localhost:5173/test"
+
+    recordings_dir: str = "./data/recordings"
+    recording_retention_days: int = 30
+    recording_max_bytes: int = 2_000_000_000
+    recording_max_chunk_bytes: int = 25_000_000
+
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    email_from: str = "InterviewLab <no-reply@interviewlab.ai>"
+    resend_api_key: str = ""
+    resend_from: str = "InterviewLab <notifications@send.flojia.top>"
+
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_generation_model: str = "gemini-3.1-flash-lite"
+    gemini_analysis_model: str = "gemini-3.1-flash-lite"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

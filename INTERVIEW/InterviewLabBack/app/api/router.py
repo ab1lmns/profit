@@ -1,0 +1,34 @@
+from fastapi import APIRouter
+
+from app.api.routes import (
+    admin,
+    ai,
+    analytics,
+    auth,
+    candidates,
+    files,
+    proctoring,
+    sessions,
+    settings,
+    task_library,
+    tests,
+)
+
+api_router = APIRouter(prefix="/api")
+
+api_router.include_router(auth.router)
+api_router.include_router(tests.router)
+api_router.include_router(candidates.router)
+api_router.include_router(sessions.router)
+api_router.include_router(analytics.router)
+api_router.include_router(admin.router)
+api_router.include_router(ai.router)
+api_router.include_router(proctoring.router)
+api_router.include_router(task_library.router)
+api_router.include_router(settings.router)
+api_router.include_router(files.router)
+
+
+@api_router.get("/health", tags=["system"])
+async def health() -> dict:
+    return {"status": "ok"}
