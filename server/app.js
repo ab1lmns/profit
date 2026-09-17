@@ -1,8 +1,8 @@
 import http from 'node:http';
 import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, statSync, createReadStream } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, renameSync, statSync, createReadStream, unlinkSync } from 'node:fs';
 import { join, resolve, extname } from 'node:path';
-import { catalog, findTrack, publicTask, score } from './catalog.js';
+import { catalog, findTrack, publicTask, score, combineSubjectTasks, combineModelingTasks } from './catalog.js';
 
 const uid = () => randomBytes(18).toString('hex');
 const digest = token => createHash('sha256').update(token || '').digest('hex');
@@ -21,10 +21,23 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(join(dataDir, 'recordings'), { recursive: true });
   mkdirSync(join(dataDir, 'history'), { recursive: true });
+  mkdirSync(join(dataDir, 'uploads'), { recursive: true });
   const historyFile = (room, p) => join(dataDir, 'history', `${room.id}-${p.id}.jsonl`);
   const historyFor = (room, p) => [...(p.history || []), ...(existsSync(historyFile(room, p)) ? readFileSync(historyFile(room, p), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [])];
   const dbFile = join(dataDir, 'state.json');
   const db = existsSync(dbFile) ? JSON.parse(readFileSync(dbFile, 'utf8')) : { rooms: [], auth: {} };
+  db.candidates = db.candidates || [];
+  db.candidateAuth = db.candidateAuth || {};
+  db.customTracks = db.customTracks || {};
+  const getTrack = trackId => {
+    const base = catalog.find(t => t.id === trackId);
+    if (!base) return null;
+    if (db.customTracks && db.customTracks[trackId] && Array.isArray(db.customTracks[trackId].tasks)) {
+      return { ...base, tasks: db.customTracks[trackId].tasks };
+    }
+    return base;
+  };
+  const getTracks = teacher => catalog.filter(c => teacher.tracks.includes(c.id)).map(c => getTrack(c.id));
   const streams = new Map(), attempts = new Map();
   const persist = () => { writeFileSync(`${dbFile}.tmp`, JSON.stringify(db), { mode: 0o600 }); renameSync(`${dbFile}.tmp`, dbFile); };
   const cookie = (res, name, token, maxAge = 86400) => res.setHeader('Set-Cookie', `${name}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secureCookies ? '; Secure' : ''}`);
@@ -34,6 +47,13 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
     return a && a.expires > now() ? accounts.find(t => t.login === a.login) : null;
   };
   const mustTeacher = req => teacherFor(req) || fail(401, 'Войдите в кабинет преподавателя');
+  const candidateFor = req => {
+    const a = db.candidateAuth[digest(cookies(req).profit_candidate)];
+    return a && a.expires > now() ? db.candidates.find(c => c.id === a.candidateId) : null;
+  };
+  const mustCandidate = req => candidateFor(req) || fail(401, 'Войдите в профиль кандидата');
+  const candidateView = c => { const { passwordHash, ...rest } = c; return rest; };
+  const removeFile = file => { try { if (existsSync(file)) unlinkSync(file); } catch { /* The database record is still removed. */ } };
   const own = (req, room) => { const t = mustTeacher(req); if (room.owner !== t.login) fail(403, 'Нет доступа к этой сессии'); return t; };
   const participantFor = (req, room) => room.participants.find(p => p.tokenHash === digest(cookies(req)[`profit_p_${room.id}`])) || fail(401, 'Зарегистрируйтесь по ссылке сессии');
   const event = (p, type, detail = '') => { p.events.push({ id: uid(), type, detail, at: now() }); };
@@ -43,7 +63,7 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
     capacity: room.capacity, status: room.status, startedAt: room.startedAt, endsAt: room.endsAt,
     durationMinutes: room.durationMinutes, createdAt: room.createdAt, serverNow: now(),
     tasks: room.tasks.map(publicTask), registered: room.participants.length,
-    ...(participant ? { participant: { id: participant.id, name: participant.name, number: participant.number, group: participant.group, answers: participant.answers, submittedAt: participant.submittedAt, revision: participant.revision } } : {
+    ...(participant ? { participant: { id: participant.id, name: participant.name, number: participant.number, group: participant.group, answers: participant.answers, submittedAt: participant.submittedAt, revision: participant.revision, score: participant.submittedAt ? score(room, participant) : null } } : {
       participants: room.participants.map(p => ({ id: p.id, name: p.name, number: p.number, group: p.group, online: online(room, p), screen: online(room, p) && p.screen, joinedAt: p.joinedAt, submittedAt: p.submittedAt, updatedAt: p.updatedAt, activeTaskId: p.activeTaskId, logVersion: p.events.length, lastEvent: p.events.at(-1), recordingState: p.recordingState || 'idle', recordingCount: p.recordings.length, lastRecordingAt: p.recordings.at(-1)?.at || null, answered: Object.keys(p.answers).length, eventCount: p.events.filter(e => ['tab_hidden','window_blur','paste','screen_stopped','fullscreen_exit','disconnected','recording_error'].includes(e.type)).length, score: p.submittedAt ? score(room, p) : null, grade: p.grade })),
     }),
   });
@@ -118,16 +138,188 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
         persist(); cookie(res, 'profit_teacher', '', 0); return json({ ok: true });
       }
       if (path === '/api/teacher/me') { const t = mustTeacher(req); return json({ name: t.name, tracks: t.tracks }); }
-      if (path === '/api/catalog') { const t = mustTeacher(req); return json(catalog.filter(c => t.tracks.includes(c.id)).map(c => ({ ...c, tasks: c.tasks.map(publicTask) }))); }
+      if (path === '/api/candidates/upload' && req.method === 'POST') {
+        const b = await body(req, 15_000_000);
+        if (!b.data || !b.name) fail(400, 'Файл не передан');
+        const rawBase64 = b.data.includes(',') ? b.data.split(',')[1] : b.data;
+        const buffer = Buffer.from(rawBase64, 'base64');
+        if (buffer.length === 0) fail(400, 'Пустой файл');
+        if (buffer.length > 10_000_000) fail(413, 'Максимальный размер файла — 10 МБ');
+        const originalName = clean(b.name, 120).replace(/[^a-zA-Z0-9._\-\u0400-\u04FF]/g, '_');
+        const fileName = `${uid()}_${originalName}`;
+        const filePath = join(dataDir, 'uploads', fileName);
+        writeFileSync(filePath, buffer, { mode: 0o600 });
+        const doc = {
+          id: uid(),
+          name: clean(b.name, 120),
+          size: buffer.length,
+          type: clean(b.type, 100) || 'application/octet-stream',
+          fileName,
+          url: `/api/uploads/${fileName}`,
+          uploadedAt: now(),
+        };
+        return json({ document: doc }, 201);
+      }
+      if (path.startsWith('/api/uploads/')) {
+        const fileName = path.slice('/api/uploads/'.length);
+        if (!fileName || fileName.includes('..') || !/^[a-zA-Z0-9._\-\u0400-\u04FF]+$/.test(fileName)) fail(400, 'Некорректное имя файла');
+        const filePath = join(dataDir, 'uploads', fileName);
+        if (!existsSync(filePath) || !statSync(filePath).isFile()) fail(404, 'Файл не найден');
+        const size = statSync(filePath).size;
+        const ext = extname(fileName).toLowerCase();
+        const mime = {
+          '.pdf': 'application/pdf',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp',
+          '.svg': 'image/svg+xml',
+          '.zip': 'application/zip',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          '.txt': 'text/plain; charset=utf-8',
+        };
+        res.writeHead(200, {
+          'Content-Type': mime[ext] || 'application/octet-stream',
+          'Content-Length': size,
+          'Content-Disposition': `inline; filename="${encodeURIComponent(fileName.split('_').slice(1).join('_') || fileName)}"`,
+          'Cache-Control': 'public, max-age=86400',
+        });
+        createReadStream(filePath).pipe(res);
+        return;
+      }
+      if (path === '/api/candidates/register' && req.method === 'POST') {
+        const b = await body(req);
+        const name = clean(b.name, 150), email = clean(b.email, 150).toLowerCase();
+        const password = clean(b.password, 200);
+        if (!name || name.length < 3) fail(400, 'Укажите корректное ФИО');
+        if (!email || !email.includes('@')) fail(400, 'Укажите корректный email');
+        if (!password || password.length < 6) fail(400, 'Пароль должен содержать от 6 символов');
+        if (db.candidates.some(c => c.email === email)) fail(409, 'Кандидат с таким email уже зарегистрирован');
+        const candidate = {
+          id: uid(),
+          name,
+          email,
+          phone: clean(b.phone, 50),
+          group: clean(b.group, 60),
+          passwordHash: scryptSync(password, email, 64).toString('hex'),
+          directions: Array.isArray(b.directions) ? b.directions.slice(0, 2) : [],
+          motivation: clean(b.motivation, 2000),
+          skills: Array.isArray(b.skills) ? b.skills : [],
+          experience: clean(b.experience, 2000),
+          links: clean(b.links, 1000),
+          documents: Array.isArray(b.documents) ? b.documents.slice(0, 15) : [],
+          goals: clean(b.goals, 2000),
+          timeCommitment: clean(b.timeCommitment, 100),
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        db.candidates.unshift(candidate);
+        const token = uid();
+        db.candidateAuth[digest(token)] = { candidateId: candidate.id, expires: now() + 30 * 86400_000 };
+        persist();
+        cookie(res, 'profit_candidate', token, 30 * 86400);
+        return json({ candidate: candidateView(candidate) }, 201);
+      }
+      if (path === '/api/candidates/login' && req.method === 'POST') {
+        const b = await body(req);
+        const email = clean(b.email, 150).toLowerCase(), password = clean(b.password, 200);
+        const candidate = db.candidates.find(c => c.email === email);
+        if (!candidate) fail(401, 'Неверный email или пароль');
+        const hashed = scryptSync(password, email, 64).toString('hex');
+        if (hashed !== candidate.passwordHash) fail(401, 'Неверный email или пароль');
+        const token = uid();
+        db.candidateAuth[digest(token)] = { candidateId: candidate.id, expires: now() + 30 * 86400_000 };
+        persist();
+        cookie(res, 'profit_candidate', token, 30 * 86400);
+        return json({ candidate: candidateView(candidate) });
+      }
+      if (path === '/api/candidates/logout' && req.method === 'POST') {
+        const token = cookies(req).profit_candidate;
+        if (token) delete db.candidateAuth[digest(token)];
+        persist();
+        cookie(res, 'profit_candidate', '', 0);
+        return json({ ok: true });
+      }
+      if (path === '/api/candidates/me') {
+        const c = mustCandidate(req);
+        if (req.method === 'GET') return json({ candidate: candidateView(c) });
+        if (req.method === 'PUT') {
+          const b = await body(req);
+          if (b.name) c.name = clean(b.name, 150);
+          if (b.phone !== undefined) c.phone = clean(b.phone, 50);
+          if (b.group) c.group = clean(b.group, 60);
+          if (Array.isArray(b.directions)) c.directions = b.directions.slice(0, 2);
+          if (b.motivation !== undefined) c.motivation = clean(b.motivation, 2000);
+          if (Array.isArray(b.skills)) c.skills = b.skills;
+          if (b.experience !== undefined) c.experience = clean(b.experience, 2000);
+          if (b.links !== undefined) c.links = clean(b.links, 1000);
+          if (Array.isArray(b.documents)) c.documents = b.documents.slice(0, 15);
+          if (b.goals !== undefined) c.goals = clean(b.goals, 2000);
+          if (b.timeCommitment !== undefined) c.timeCommitment = clean(b.timeCommitment, 100);
+          c.updatedAt = now();
+          persist();
+          return json({ candidate: candidateView(c) });
+        }
+      }
+      if (path === '/api/candidates' && req.method === 'GET') {
+        mustTeacher(req);
+        return json({ candidates: db.candidates.map(candidateView) });
+      }
+      const candidateMatch = path.match(/^\/api\/candidates\/([a-f0-9]{36})$/);
+      if (candidateMatch && req.method === 'DELETE') {
+        mustTeacher(req);
+        const candidate = db.candidates.find(c => c.id === candidateMatch[1]);
+        if (!candidate) fail(404, 'Кандидат не найден');
+        for (const doc of candidate.documents || []) {
+          if (typeof doc?.fileName === 'string' && /^[a-zA-Z0-9._\-\u0400-\u04FF]+$/.test(doc.fileName)) removeFile(join(dataDir, 'uploads', doc.fileName));
+        }
+        db.candidates = db.candidates.filter(c => c.id !== candidate.id);
+        for (const [key, auth] of Object.entries(db.candidateAuth)) if (auth.candidateId === candidate.id) delete db.candidateAuth[key];
+        persist();
+        return json({ ok: true });
+      }
+      if (path === '/api/catalog') { const t = mustTeacher(req); return json(getTracks(t).map(c => ({ ...c, tasks: c.tasks.map(publicTask) }))); }
+      if (path === '/api/teacher/catalog' && req.method === 'GET') {
+        const t = mustTeacher(req);
+        return json(getTracks(t));
+      }
+      const teacherCatalogMatch = path.match(/^\/api\/teacher\/catalog\/([a-zA-Z0-9_-]+)(?:\/(reset))?$/);
+      if (teacherCatalogMatch) {
+        const t = mustTeacher(req);
+        const trackId = teacherCatalogMatch[1];
+        const isReset = teacherCatalogMatch[2] === 'reset';
+        if (!t.tracks.includes(trackId)) fail(403, 'Направление недоступно');
+        if (isReset && req.method === 'POST') {
+          delete db.customTracks[trackId];
+          persist();
+          return json({ ok: true, track: getTrack(trackId) });
+        }
+        if (!isReset && req.method === 'PUT') {
+          const b = await body(req, 1_000_000);
+          if (!Array.isArray(b.tasks) || b.tasks.length === 0) fail(400, 'Задания не переданы');
+          db.customTracks[trackId] = {
+            tasks: b.tasks,
+            updatedAt: now(),
+          };
+          persist();
+          return json({ ok: true, track: getTrack(trackId) });
+        }
+      }
       if (path === '/api/rooms') {
         const t = mustTeacher(req);
         if (req.method === 'GET') { db.rooms.forEach(expire); return json(db.rooms.filter(r => r.owner === t.login).map(r => view(r))); }
         if (req.method === 'POST') {
-          const b = await body(req); const track = findTrack(b.trackId);
+          const b = await body(req); const track = getTrack(b.trackId);
           if (!track || !t.tracks.includes(track.id)) fail(403, 'Направление недоступно');
           if (!Number.isInteger(b.capacity) || b.capacity < 1 || b.capacity > 100) fail(400, 'Укажите от 1 до 100 участников');
           if (!Array.isArray(b.taskIds) || !b.taskIds.length || new Set(b.taskIds).size !== b.taskIds.length || b.taskIds.some(id => !track.tasks.some(task => task.id === id))) fail(400, 'Выберите задания');
-          const room = { id: uid(), owner: t.login, title: clean(b.title) || `${track.label} · Тестирование`, trackId: track.id, trackLabel: track.label, tasks: structuredClone(track.tasks.filter(task => b.taskIds.includes(task.id))), capacity: b.capacity, status: 'waiting', createdAt: now(), startedAt: null, endsAt: null, durationMinutes: 120, participants: [] };
+          const selectedTasks = structuredClone(track.tasks.filter(task => b.taskIds.includes(task.id)));
+          const combineSubjects = track.id === 'subject-disciplines' && (b.combineSubjects === true || b.combineTasks === true);
+          const combineModeling = track.id === '3d-modeling' && b.combineTasks === true;
+          if ((combineSubjects || combineModeling) && (selectedTasks.length < 2 || selectedTasks.some(task => !Array.isArray(task.questions)))) fail(400, 'Для общего теста выберите минимум два раздела с вопросами');
+          const tasks = combineSubjects ? [combineSubjectTasks(selectedTasks)] : combineModeling ? [combineModelingTasks(selectedTasks)] : selectedTasks;
+          const room = { id: uid(), owner: t.login, title: clean(b.title) || `${track.label} · Тестирование`, trackId: track.id, trackLabel: track.label, tasks, capacity: b.capacity, status: 'waiting', createdAt: now(), startedAt: null, endsAt: null, durationMinutes: 120, participants: [] };
           db.rooms.unshift(room); persist(); return json(view(room), 201);
         }
       }
@@ -135,6 +327,21 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
       if (match) {
         const room = db.rooms.find(r => r.id === match[1]); if (!room) fail(404, 'Сессия не найдена');
         expire(room); const action = match[2] || '';
+        if (!action && req.method === 'DELETE') {
+          own(req, room);
+          if (room.status === 'running') fail(409, 'Нельзя удалить активную сессию. Сначала завершите тестирование.');
+          for (const p of room.participants) {
+            for (const stream of [...streams.values()].filter(s => s.roomId === room.id && s.participantId === p.id)) { streams.delete(stream.id); stream.res.end(); }
+            for (const recording of p.recordings || []) {
+              if (typeof recording.file === 'string' && /^[a-f0-9-]{36}-[a-f0-9-]{36}-[a-f0-9-]{36}\.webm$/.test(recording.file)) removeFile(join(dataDir, 'recordings', recording.file));
+            }
+            removeFile(historyFile(room, p));
+          }
+          for (const stream of [...streams.values()].filter(s => s.roomId === room.id)) { streams.delete(stream.id); stream.res.end(); }
+          db.rooms = db.rooms.filter(r => r.id !== room.id);
+          persist();
+          return json({ ok: true });
+        }
         if (action === 'public' && req.method === 'GET') return json({ id: room.id, title: room.title, trackLabel: room.trackLabel, status: room.status, capacity: room.capacity, registered: room.participants.length });
         if (action === 'join' && req.method === 'POST') {
           const b = await body(req);
@@ -254,7 +461,18 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
             if (!Number.isInteger(b.score) || b.score < 0 || b.score > 100) fail(400, 'Оценка от 0 до 100');
             p.grade = { score: b.score, comment: clean(b.comment, 3000), at: now() }; event(p, 'grade_saved', `${b.score}/100`); persist(); broadcast(room); return json(p.grade);
           }
-          if (!sub && req.method === 'GET') return json({ id: p.id, name: p.name, number: p.number, group: p.group, answers: p.answers, events: p.events, history: url.searchParams.get('history') === '1' ? historyFor(room, p) : [], historyCount: p.historyCount || 0, recordingState: p.recordingState || 'idle', recordings: p.recordings.map(({ file, ...r }) => r), submittedAt: p.submittedAt, score: score(room, p), grade: p.grade });
+          if (!sub && req.method === 'GET') {
+            const answerReview = room.tasks.filter(task => task.questions).map(task => ({
+              id: task.id,
+              title: task.title,
+              questions: task.questions.map((question, index) => {
+                const selectedIndex = p.answers[task.id]?.choices?.[index];
+                const section = task.subjectSections?.find(section => index >= section.start && index < section.start + section.count);
+                return { question: question.q, options: question.o, selectedIndex: Number.isInteger(selectedIndex) ? selectedIndex : null, correctIndex: question.c, ...(section ? { subject: section.title } : {}) };
+              }),
+            }));
+            return json({ id: p.id, name: p.name, number: p.number, group: p.group, answers: p.answers, answerReview, events: p.events, history: url.searchParams.get('history') === '1' ? historyFor(room, p) : [], historyCount: p.historyCount || 0, recordingState: p.recordingState || 'idle', recordings: p.recordings.map(({ file, ...r }) => r), submittedAt: p.submittedAt, score: score(room, p), grade: p.grade });
+          }
         }
         own(req, room);
         if (!action && req.method === 'GET') return json(view(room));

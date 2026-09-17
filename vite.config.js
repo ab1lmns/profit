@@ -5,7 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    fs: { deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/server/**", "**/INTERVIEW/**", "**/src/data/**"] },
+    strictPort: true,
+    fs: {
+      deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/server/**", "**/INTERVIEW/**"],
+    },
     proxy: { "/api": { target: "http://127.0.0.1:3001", changeOrigin: false } },
   },
 });
