@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   CheckCircle2, LogIn, LogOut, Save, UserPlus, Sparkles, Plus, X,
   ArrowLeft, ExternalLink, BookOpen, Award, Compass, Send,
-  Check, Mail, User, Link2, Phone, GraduationCap, UploadCloud,
+  Check, Mail, User, Link2, Phone, GraduationCap, UploadCloud, Bell, ArrowRight,
   FileText, Paperclip, Trash2, FileCheck
 } from 'lucide-react';
 import { DIRECTIONS } from '../data/directions.js';
@@ -66,6 +66,7 @@ const emptyProfile = {
   links: '',
   documents: [],
   goals: '',
+  notifications: [],
 };
 
 const toForm = candidate => ({
@@ -221,6 +222,19 @@ export default function CandidatePortal() {
     }
   }
 
+  async function openInvitation(invitation) {
+    try {
+      const { notification } = await post(`/candidates/me/notifications/${invitation.id}/read`);
+      setForm(current => ({
+        ...current,
+        notifications: (current.notifications || []).map(item => item.id === notification.id ? notification : item),
+      }));
+    } catch (error) {
+      // The test link still works if a stale notification was already removed.
+    }
+    location.assign(`/join/${invitation.roomId}`);
+  }
+
   if (mode === 'loading') {
     return (
       <>
@@ -336,6 +350,20 @@ export default function CandidatePortal() {
 
             <Notice>{error}</Notice>
             {profile && <Notice kind="info">{saved}</Notice>}
+
+            {profile && (form.notifications || []).length > 0 && <section aria-label="Приглашения на тест" style={{ margin: '0 0 28px', padding: '18px', borderRadius: '14px', border: '1px solid #b9dfcc', background: '#f2fbf6' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <Bell size={18} color="var(--exam-green)" />
+                <strong style={{ fontSize: '15px' }}>Приглашения на тестирование</strong>
+                {(form.notifications || []).some(item => !item.readAt) && <span style={{ marginLeft: 'auto', fontSize: '11px', fontWeight: 700, color: 'white', background: 'var(--exam-green)', padding: '3px 8px', borderRadius: '999px' }}>Новое</span>}
+              </div>
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {(form.notifications || []).map(invitation => <div key={invitation.id} style={{ background: 'white', border: '1px solid var(--exam-line)', padding: '12px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 220px' }}><strong style={{ display: 'block', fontSize: '13px' }}>{invitation.title}</strong><span style={{ fontSize: '12px', color: 'var(--exam-muted)' }}>{invitation.trackLabel} · приглашение от преподавателя</span></div>
+                  <button className="primary" type="button" onClick={() => openInvitation(invitation)}><ArrowRight size={16} />Открыть тест</button>
+                </div>)}
+              </div>
+            </section>}
 
             <form onSubmit={submit}>
 

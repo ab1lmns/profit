@@ -52,7 +52,11 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
     return a && a.expires > now() ? db.candidates.find(c => c.id === a.candidateId) : null;
   };
   const mustCandidate = req => candidateFor(req) || fail(401, 'Войдите в профиль кандидата');
-  const candidateView = c => { const { passwordHash, ...rest } = c; return rest; };
+  // Invitations are private to a candidate's signed-in profile.  They are not
+  // returned in the teacher's candidate list.
+  const invitationView = invitation => ({ id: invitation.id, roomId: invitation.roomId, title: invitation.title, trackLabel: invitation.trackLabel, sentAt: invitation.sentAt, readAt: invitation.readAt || null });
+  const candidateView = c => { const { passwordHash, notifications, ...rest } = c; return rest; };
+  const candidateProfileView = c => ({ ...candidateView(c), notifications: (c.notifications || []).map(invitationView) });
   const removeFile = file => { try { if (existsSync(file)) unlinkSync(file); } catch { /* The database record is still removed. */ } };
   const own = (req, room) => { const t = mustTeacher(req); if (room.owner !== t.login) fail(403, 'Нет доступа к этой сессии'); return t; };
   const participantFor = (req, room) => room.participants.find(p => p.tokenHash === digest(cookies(req)[`profit_p_${room.id}`])) || fail(401, 'Зарегистрируйтесь по ссылке сессии');
@@ -211,6 +215,7 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
           documents: Array.isArray(b.documents) ? b.documents.slice(0, 15) : [],
           goals: clean(b.goals, 2000),
           timeCommitment: clean(b.timeCommitment, 100),
+          notifications: [],
           createdAt: now(),
           updatedAt: now(),
         };
@@ -219,7 +224,7 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
         db.candidateAuth[digest(token)] = { candidateId: candidate.id, expires: now() + 30 * 86400_000 };
         persist();
         cookie(res, 'profit_candidate', token, 30 * 86400);
-        return json({ candidate: candidateView(candidate) }, 201);
+        return json({ candidate: candidateProfileView(candidate) }, 201);
       }
       if (path === '/api/candidates/login' && req.method === 'POST') {
         const b = await body(req);
@@ -232,7 +237,7 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
         db.candidateAuth[digest(token)] = { candidateId: candidate.id, expires: now() + 30 * 86400_000 };
         persist();
         cookie(res, 'profit_candidate', token, 30 * 86400);
-        return json({ candidate: candidateView(candidate) });
+        return json({ candidate: candidateProfileView(candidate) });
       }
       if (path === '/api/candidates/logout' && req.method === 'POST') {
         const token = cookies(req).profit_candidate;
@@ -243,7 +248,7 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
       }
       if (path === '/api/candidates/me') {
         const c = mustCandidate(req);
-        if (req.method === 'GET') return json({ candidate: candidateView(c) });
+        if (req.method === 'GET') return json({ candidate: candidateProfileView(c) });
         if (req.method === 'PUT') {
           const b = await body(req);
           if (b.name) c.name = clean(b.name, 150);
@@ -259,12 +264,39 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
           if (b.timeCommitment !== undefined) c.timeCommitment = clean(b.timeCommitment, 100);
           c.updatedAt = now();
           persist();
-          return json({ candidate: candidateView(c) });
+          return json({ candidate: candidateProfileView(c) });
         }
       }
       if (path === '/api/candidates' && req.method === 'GET') {
         mustTeacher(req);
         return json({ candidates: db.candidates.map(candidateView) });
+      }
+      const candidateInvitationMatch = path.match(/^\/api\/candidates\/([a-f0-9]{36})\/invitations$/);
+      if (candidateInvitationMatch && req.method === 'POST') {
+        const teacher = mustTeacher(req);
+        const candidate = db.candidates.find(c => c.id === candidateInvitationMatch[1]);
+        if (!candidate) fail(404, 'Кандидат не найден');
+        const b = await body(req);
+        const room = db.rooms.find(r => r.id === clean(b.roomId, 36));
+        if (!room) fail(404, 'Сессия не найдена');
+        if (room.owner !== teacher.login) fail(403, 'Нет доступа к этой сессии');
+        if (room.status !== 'waiting') fail(409, 'Отправлять приглашения можно только до начала тестирования');
+        candidate.notifications = candidate.notifications || [];
+        const existing = candidate.notifications.find(n => n.roomId === room.id);
+        const invitation = existing || { id: uid(), roomId: room.id };
+        Object.assign(invitation, { title: room.title, trackLabel: room.trackLabel, sentAt: now(), readAt: null });
+        if (!existing) candidate.notifications.unshift(invitation);
+        candidate.updatedAt = now();
+        persist();
+        return json({ invitation: invitationView(invitation) }, existing ? 200 : 201);
+      }
+      const notificationMatch = path.match(/^\/api\/candidates\/me\/notifications\/([a-f0-9]{36})\/read$/);
+      if (notificationMatch && req.method === 'POST') {
+        const candidate = mustCandidate(req);
+        const notification = (candidate.notifications || []).find(n => n.id === notificationMatch[1]);
+        if (!notification) fail(404, 'Приглашение не найдено');
+        notification.readAt = now(); candidate.updatedAt = now(); persist();
+        return json({ notification: invitationView(notification) });
       }
       const candidateMatch = path.match(/^\/api\/candidates\/([a-f0-9]{36})$/);
       if (candidateMatch && req.method === 'DELETE') {
@@ -338,6 +370,9 @@ export function createApp({ dataDir = resolve('server/data'), teachers, iceServe
             removeFile(historyFile(room, p));
           }
           for (const stream of [...streams.values()].filter(s => s.roomId === room.id)) { streams.delete(stream.id); stream.res.end(); }
+          for (const candidate of db.candidates) {
+            candidate.notifications = (candidate.notifications || []).filter(notification => notification.roomId !== room.id);
+          }
           db.rooms = db.rooms.filter(r => r.id !== room.id);
           persist();
           return json({ ok: true });

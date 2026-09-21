@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, ArrowUpRight, Copy, Check, Play, Square, Users, Monitor, FileText, LogOut, ChevronRight, ShieldCheck, RefreshCw, X, Download, UserPlus, Compass, Award, ExternalLink, Clock, Sparkles, Paperclip, BookOpen, Edit3, Trash2 } from 'lucide-react';
+import { Plus, ArrowUpRight, Copy, Check, Play, Square, Users, Monitor, FileText, LogOut, ChevronRight, ShieldCheck, RefreshCw, X, Download, UserPlus, Compass, Award, ExternalLink, Clock, Sparkles, Paperclip, BookOpen, Edit3, Trash2, Send } from 'lucide-react';
 import { DIRECTIONS } from '../data/directions.js';
 import { api, post, dateLabel } from './api';
 import { useRoom } from './useRoom';
@@ -49,11 +49,45 @@ function TeacherDashboard({ teacher, onLogout, rooms, catalog, candidates, filte
     <div className="page-heading"><div><span className="eyebrow">КАБИНЕТ ПРЕПОДАВАТЕЛЯ</span><h1>{tab === 'sessions' ? 'Тестирование' : tab === 'candidates' ? 'Заявки студентов' : 'Банк заданий и тестов'}</h1><p>Проводите отбор, проверяйте ответы и управляйте анкетами.</p></div><div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}><button className={`secondary ${tab === 'sessions' ? 'selected' : ''}`} onClick={() => setTab('sessions')}><FileText size={16} />Сессии ({rooms.length})</button><button className={`secondary ${tab === 'candidates' ? 'selected' : ''}`} onClick={() => setTab('candidates')}><Users size={16} />Анкеты ({candidates.length})</button><button className={`secondary ${tab === 'tasks' ? 'selected' : ''}`} onClick={() => setTab('tasks')}><Edit3 size={16} />Банк заданий</button>{tab === 'sessions' && <button className="primary" onClick={() => setCreate(true)} disabled={!catalog.length}><Plus size={18} />Создать сессию</button>}</div></div>
     <Notice>{error}</Notice>
     {tab === 'sessions' && <><div className="section-heading"><h2>Ваши сессии</h2><button className="text-button" onClick={refresh}><RefreshCw size={16} />Обновить</button></div>{!rooms.length ? <div className="empty-state"><FileText size={32} /><h2>Сессий пока нет</h2></div> : <div className="room-list">{rooms.map(room => <div key={room.id} style={{ display: 'flex', gap: '10px', alignItems: 'stretch' }}><button className="room-card" style={{ flex: 1 }} onClick={() => openRoom(room.id)}><span className="room-icon"><FileText size={24} /></span><div className="room-card-main"><Badge status={room.status} /><h3>{room.title}</h3><p>{room.trackLabel} · {room.tasks.length} тест · {dateLabel(room.createdAt)}</p></div><span className="room-count"><Users size={17} />{room.registered} / {room.capacity}</span><ChevronRight size={20} /></button><button className="danger" title="Удалить сессию" disabled={room.status === 'running'} onClick={() => removeRoom(room)}><Trash2 size={17} />Удалить</button></div>)}</div>}</>}
-    {tab === 'candidates' && <><div className="section-heading"><h2>Анкеты кандидатов</h2><div style={{ display: 'flex', gap: '8px' }}><select value={dirFilter} onChange={e => setDirFilter(e.target.value)}><option value="all">Все направления</option>{DIRECTIONS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select><button className="text-button" onClick={refresh}><RefreshCw size={16} />Обновить</button></div></div>{!filteredCandidates.length ? <div className="empty-state"><Users size={32} /><h2>Заявок пока нет</h2></div> : <div style={{ display: 'grid', gap: '16px' }}>{filteredCandidates.map(candidate => <section key={candidate.id} className="panel"><div className="section-heading"><div><h3>{candidate.name}</h3><p>{candidate.email} · {candidate.phone || 'Телефон не указан'} · {dateLabel(candidate.createdAt)}</p></div><button className="danger" onClick={() => removeCandidate(candidate)}><Trash2 size={16} />Удалить</button></div><p><strong>Направления:</strong> {(candidate.directions || []).map(id => DIRECTIONS.find(d => d.id === id)?.label || id).join(', ') || 'Не выбраны'}</p>{candidate.motivation && <p><strong>Мотивация:</strong> {candidate.motivation}</p>}{candidate.skills?.length > 0 && <p><strong>Навыки:</strong> {candidate.skills.map(skill => typeof skill === 'string' ? skill : `${skill.name} — ${skill.level}`).join(', ')}</p>}{candidate.experience && <p><strong>Опыт и проекты:</strong> {candidate.experience}</p>}{candidate.links && <p><a href={candidate.links.startsWith('http') ? candidate.links : `https://${candidate.links}`} target="_blank" rel="noreferrer">Портфолио / ссылки <ExternalLink size={14} /></a></p>}{candidate.documents?.length > 0 && <p><strong>Документы:</strong> {candidate.documents.map((doc, i) => <a key={doc.id || i} href={doc.url} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>{doc.name}</a>)}</p>}</section>)}</div>}</>}
+    {tab === 'candidates' && <><div className="section-heading"><h2>Анкеты кандидатов</h2><div style={{ display: 'flex', gap: '8px' }}><select value={dirFilter} onChange={e => setDirFilter(e.target.value)}><option value="all">Все направления</option>{DIRECTIONS.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}</select><button className="text-button" onClick={refresh}><RefreshCw size={16} />Обновить</button></div></div>{!filteredCandidates.length ? <div className="empty-state"><Users size={32} /><h2>Заявок пока нет</h2></div> : <div style={{ display: 'grid', gap: '16px' }}>{filteredCandidates.map(candidate => <section key={candidate.id} className="panel"><div className="section-heading"><div><h3>{candidate.name}</h3><p>{candidate.email} · {candidate.phone || 'Телефон не указан'} · {dateLabel(candidate.createdAt)}</p></div><button className="danger" onClick={() => removeCandidate(candidate)}><Trash2 size={16} />Удалить</button></div><CandidateInviteControls candidate={candidate} rooms={rooms} /><p><strong>Направления:</strong> {(candidate.directions || []).map(id => DIRECTIONS.find(d => d.id === id)?.label || id).join(', ') || 'Не выбраны'}</p>{candidate.motivation && <p><strong>Мотивация:</strong> {candidate.motivation}</p>}{candidate.skills?.length > 0 && <p><strong>Навыки:</strong> {candidate.skills.map(skill => typeof skill === 'string' ? skill : `${skill.name} — ${skill.level}`).join(', ')}</p>}{candidate.experience && <p><strong>Опыт и проекты:</strong> {candidate.experience}</p>}{candidate.links && <p><a href={candidate.links.startsWith('http') ? candidate.links : `https://${candidate.links}`} target="_blank" rel="noreferrer">Портфолио / ссылки <ExternalLink size={14} /></a></p>}{candidate.documents?.length > 0 && <p><strong>Документы:</strong> {candidate.documents.map((doc, i) => <a key={doc.id || i} href={doc.url} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>{doc.name}</a>)}</p>}</section>)}</div>}</>}
     {tab === 'tasks' && <TaskBankEditor onCatalogChanged={refresh} />}
   </main>{create && <CreateRoom catalog={catalog} onClose={() => setCreate(false)} onCreated={room => { setCreate(false); openRoom(room.id); }} />}</>;
 }
 function Stat({ icon: Icon, value, label }) { return <div className="stat-card"><Icon size={20} /><strong>{value}</strong><span>{label}</span></div>; }
+
+function CandidateInviteControls({ candidate, rooms }) {
+  const availableRooms = rooms.filter(room => room.status === 'waiting');
+  const [roomId, setRoomId] = useState(availableRooms[0]?.id || '');
+  const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!availableRooms.some(room => room.id === roomId)) setRoomId(availableRooms[0]?.id || '');
+  }, [rooms]);
+
+  async function sendInvitation() {
+    if (!roomId) return;
+    setBusy(true); setMessage('');
+    try {
+      await post(`/candidates/${candidate.id}/invitations`, { roomId });
+      setMessage('Приглашение отправлено в личный кабинет кандидата.');
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div style={{ background: '#f8fafc', border: '1px solid var(--exam-line)', borderRadius: '12px', padding: '12px', display: 'grid', gap: '8px' }}>
+    <strong style={{ fontSize: '13px' }}>Пригласить на тест через сайт</strong>
+    {availableRooms.length ? <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+      <select aria-label="Сессия для приглашения" value={roomId} onChange={event => setRoomId(event.target.value)} style={{ flex: '1 1 240px', minHeight: '40px' }}>
+        {availableRooms.map(room => <option key={room.id} value={room.id}>{room.title} · {room.trackLabel}</option>)}
+      </select>
+      <button className="primary" type="button" disabled={busy} onClick={sendInvitation}><Send size={16} />{busy ? 'Отправляем…' : 'Отправить приглашение'}</button>
+    </div> : <span style={{ fontSize: '12px', color: 'var(--exam-muted)' }}>Сначала создайте новую сессию: приглашения отправляются до общего старта.</span>}
+    {message && <span style={{ fontSize: '12px', color: message.startsWith('Приглашение') ? 'var(--exam-green)' : '#b42318' }}>{message}</span>}
+  </div>;
+}
 const combinableTracks = ['subject-disciplines', '3d-modeling'];
 function CreateRoom({ catalog, onClose, onCreated }) {
   const dialog = useDialog(onClose);
@@ -87,14 +121,49 @@ function CreateRoom({ catalog, onClose, onCreated }) {
     </form>
   </section></div>;
 }
+
+function RoomInviteControls({ room, candidates }) {
+  const eligible = candidates.filter(candidate => (candidate.directions || []).includes(room.trackId));
+  const [candidateId, setCandidateId] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!eligible.some(candidate => candidate.id === candidateId)) setCandidateId(eligible[0]?.id || '');
+  }, [candidates, room.trackId]);
+
+  async function sendInvitation() {
+    if (!candidateId) return;
+    setBusy(true); setMessage('');
+    try {
+      await post(`/candidates/${candidateId}/invitations`, { roomId: room.id });
+      const candidate = eligible.find(item => item.id === candidateId);
+      setMessage(`Приглашение отправлено: ${candidate?.name || 'студенту'}.`);
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (room.status !== 'waiting') return <p className="muted">Приглашения отправляются до начала тестирования.</p>;
+  if (!eligible.length) return <p className="muted">Нет зарегистрированных студентов по направлению «{room.trackLabel}». Сначала студенту нужно создать профиль.</p>;
+  return <div style={{ display: 'grid', gap: '10px' }}>
+    <label>Кому отправить<select aria-label="Студент для приглашения" value={candidateId} onChange={event => setCandidateId(event.target.value)}>
+      {eligible.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.name} · {candidate.group || candidate.email}</option>)}
+    </select></label>
+    <button className="primary" type="button" disabled={busy} onClick={sendInvitation}><Send size={16} />{busy ? 'Отправляем…' : 'Отправить в личный кабинет'}</button>
+    {message && <span style={{ fontSize: '12px', color: message.startsWith('Приглашение') ? 'var(--exam-green)' : '#b42318' }}>{message}</span>}
+  </div>;
+}
+
 function TeacherRoom({ id, onBack }) {
   const state = useRoom(id, 'teacher'), { room, connected, offset } = state;
   const wall = useScreenWall(state);
-  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [minutes, setMinutes] = useState(120), [copied, setCopied] = useState(false), [selected, setSelected] = useState(null);
+  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [minutes, setMinutes] = useState(120), [copied, setCopied] = useState(false), [selected, setSelected] = useState(null), [candidates, setCandidates] = useState([]);
+  useEffect(() => { api('/candidates').then(data => setCandidates(data.candidates || [])).catch(() => setCandidates([])); }, []);
   async function command(action, data) { setError(''); setBusy(true); try { await post(`/rooms/${id}/${action}`, data); } catch(e) { setError(e.message); } finally { setBusy(false); } }
   if (!room) return <main className="exam-main"><Back onClick={onBack} /><Notice>{state.error}</Notice><p>Загружаем сессию…</p></main>;
   const ready = room.participants.filter(p => p.online && p.screen).length, link = `${location.origin}/join/${id}`;
-  return <main className="exam-main"><Back onClick={onBack} /><div className="page-heading"><div><div className="heading-badges"><Badge status={room.status} /><Badge status={connected ? 'online' : 'offline'}>{connected ? 'На связи' : 'Переподключение…'}</Badge></div><h1>{room.title}</h1><p>{room.trackLabel} · {room.tasks.length} блока заданий</p></div><Timer room={room} offset={offset} /></div><Notice>{error || state.error || wall.error}</Notice><div className="session-layout"><div><section className="panel invite-panel"><div className="section-heading"><h2>Ссылка для участников</h2><span className="step-number">01</span></div><p>Откройте эту ссылку на каждом компьютере до начала тестирования.</p><div className="copy-field"><input aria-label="Ссылка для участников" readOnly value={link} onFocus={e => e.target.select()} /><button className="secondary" onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { setError('Выделите и скопируйте ссылку вручную'); } }}>{copied ? <Check size={17} /> : <Copy size={17} />}{copied ? 'Скопировано' : 'Копировать'}</button></div></section><div className="section-heading participants-heading"><h2>Экраны участников <span className="count-pill">{room.registered} / {room.capacity}</span></h2><span className="muted">{ready} готовы к старту</span></div>{!room.participants.length ? <div className="empty-state compact"><Users size={32} /><h3>Аудитория пока пуста</h3><p>После регистрации участники появятся здесь автоматически.</p></div> : <ScreenGrid room={room} feeds={wall.feeds} onSelect={setSelected} />}</div><aside><section className="panel start-panel"><span className="step-number">02</span><h2>{room.status === 'waiting' ? 'Общий старт' : room.status === 'running' ? 'Сессия запущена' : 'Тестирование завершено'}</h2>{room.status === 'waiting' ? <><p>Задайте время и запустите задания у всей группы одновременно.</p><label>Время на выполнение<div className="duration-input"><input type="number" min="1" max="480" value={minutes} onChange={e => setMinutes(Number(e.target.value))} /><span>минут</span></div></label><div className="duration-presets">{[60, 90, 120].map(n => <button key={n} className={minutes === n ? 'active' : ''} onClick={() => setMinutes(n)}>{n} мин</button>)}</div><div className="readiness"><Check size={17} /><span>Зарегистрировано: {room.registered} / {room.capacity}<br />Экран подключён: {ready} / {room.registered}</span></div>{room.registered > 0 && room.registered < room.capacity && <p className="small">Можно начать с неполной группой. После старта регистрация закроется.</p>}<button className="primary full" disabled={busy || !connected || !ready || ready !== room.registered || minutes < 1 || minutes > 480} onClick={() => command('start', { durationMinutes: minutes })}><Play size={17} />{busy ? 'Запускаем…' : 'Начать тестирование'}</button></> : <><p>{room.status === 'running' ? 'Таймер общий для всех. По окончании времени сохранённые ответы будут сданы автоматически.' : 'Откройте участника, чтобы проверить ответы, историю работы и запись экрана.'}</p><div className="readiness"><Check size={17} />Сдали {room.participants.filter(p => p.submittedAt).length} из {room.registered}</div>{room.status === 'running' && <button className="danger full" disabled={busy} onClick={() => { if (confirm('Завершить тестирование у всей группы? Сохранённые ответы будут сданы.')) command('finish'); }}><Square size={16} />Завершить досрочно</button>}</>}</section><section className="panel plan-panel"><h3>В этой сессии</h3>{room.tasks.map((task, i) => <div key={task.id}><span>0{i + 1}</span><p>{task.title}</p></div>)}</section><ProctorNotice /></aside></div>{selected && <ParticipantReview key={selected} id={selected} state={state} feed={wall.feeds[selected]} onClose={() => setSelected(null)} />}</main>;
+  return <main className="exam-main"><Back onClick={onBack} /><div className="page-heading"><div><div className="heading-badges"><Badge status={room.status} /><Badge status={connected ? 'online' : 'offline'}>{connected ? 'На связи' : 'Переподключение…'}</Badge></div><h1>{room.title}</h1><p>{room.trackLabel} · {room.tasks.length} блока заданий</p></div><Timer room={room} offset={offset} /></div><Notice>{error || state.error || wall.error}</Notice><div className="session-layout"><div><section className="panel invite-panel"><div className="section-heading"><h2>Пригласить студента</h2><span className="step-number">01</span></div><RoomInviteControls room={room} candidates={candidates} /><hr style={{ width: '100%', border: 0, borderTop: '1px solid var(--exam-line)', margin: '20px 0' }} /><h3 style={{ margin: '0 0 8px' }}>Ручная ссылка для аудитории</h3><p>Резервный вариант: скопируйте её, если нужно открыть тест на компьютере вручную.</p><div className="copy-field"><input aria-label="Ручная ссылка для участников" readOnly value={link} onFocus={e => e.target.select()} /><button className="secondary" onClick={async () => { try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch { setError('Выделите и скопируйте ссылку вручную'); } }}>{copied ? <Check size={17} /> : <Copy size={17} />}{copied ? 'Скопировано' : 'Копировать'}</button></div></section><div className="section-heading participants-heading"><h2>Экраны участников <span className="count-pill">{room.registered} / {room.capacity}</span></h2><span className="muted">{ready} готовы к старту</span></div>{!room.participants.length ? <div className="empty-state compact"><Users size={32} /><h3>Аудитория пока пуста</h3><p>После регистрации участники появятся здесь автоматически.</p></div> : <ScreenGrid room={room} feeds={wall.feeds} onSelect={setSelected} />}</div><aside><section className="panel start-panel"><span className="step-number">02</span><h2>{room.status === 'waiting' ? 'Общий старт' : room.status === 'running' ? 'Сессия запущена' : 'Тестирование завершено'}</h2>{room.status === 'waiting' ? <><p>Задайте время и запустите задания у всей группы одновременно.</p><label>Время на выполнение<div className="duration-input"><input type="number" min="1" max="480" value={minutes} onChange={e => setMinutes(Number(e.target.value))} /><span>минут</span></div></label><div className="duration-presets">{[60, 90, 120].map(n => <button key={n} className={minutes === n ? 'active' : ''} onClick={() => setMinutes(n)}>{n} мин</button>)}</div><div className="readiness"><Check size={17} /><span>Зарегистрировано: {room.registered} / {room.capacity}<br />Экран подключён: {ready} / {room.registered}</span></div>{room.registered > 0 && room.registered < room.capacity && <p className="small">Можно начать с неполной группой. После старта регистрация закроется.</p>}<button className="primary full" disabled={busy || !connected || !ready || ready !== room.registered || minutes < 1 || minutes > 480} onClick={() => command('start', { durationMinutes: minutes })}><Play size={17} />{busy ? 'Запускаем…' : 'Начать тестирование'}</button></> : <><p>{room.status === 'running' ? 'Таймер общий для всех. По окончании времени сохранённые ответы будут сданы автоматически.' : 'Откройте участника, чтобы проверить ответы, историю работы и запись экрана.'}</p><div className="readiness"><Check size={17} />Сдали {room.participants.filter(p => p.submittedAt).length} из {room.registered}</div>{room.status === 'running' && <button className="danger full" disabled={busy} onClick={() => { if (confirm('Завершить тестирование у всей группы? Сохранённые ответы будут сданы.')) command('finish'); }}><Square size={16} />Завершить досрочно</button>}</>}</section><section className="panel plan-panel"><h3>В этой сессии</h3>{room.tasks.map((task, i) => <div key={task.id}><span>0{i + 1}</span><p>{task.title}</p></div>)}</section><ProctorNotice /></aside></div>{selected && <ParticipantReview key={selected} id={selected} state={state} feed={wall.feeds[selected]} onClose={() => setSelected(null)} />}</main>;
 }
 function ParticipantReview({ id, state, feed, onClose }) {
   const dialog = useDialog(onClose);

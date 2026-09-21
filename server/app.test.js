@@ -88,6 +88,29 @@ test('teacher can remove completed sessions and candidate profiles, but not a ru
   await candidate.request('/candidates/me', 'GET', undefined, 401);
 });
 
+test('teacher can invite a candidate to a waiting test in their profile', async t => {
+  const { teacher, client } = await fixture(t);
+  const room = await create(teacher, 1);
+  const candidate = client();
+  const registered = await candidate.request('/candidates/register', 'POST', {
+    name: 'Кандидат Тестовый', email: 'invite@example.test', password: 'password', directions: ['it-solutions']
+  }, 201);
+
+  const invitation = await teacher.request(`/candidates/${registered.candidate.id}/invitations`, 'POST', { roomId: room.id }, 201);
+  assert.equal(invitation.invitation.roomId, room.id);
+  const profile = await candidate.request('/candidates/me');
+  assert.equal(profile.candidate.notifications.length, 1);
+  assert.equal(profile.candidate.notifications[0].title, room.title);
+  const teacherCandidates = await teacher.request('/candidates');
+  assert.equal('notifications' in teacherCandidates.candidates[0], false);
+
+  await candidate.request(`/candidates/me/notifications/${invitation.invitation.id}/read`, 'POST');
+  const read = await candidate.request('/candidates/me');
+  assert.ok(read.candidate.notifications[0].readAt);
+  await teacher.request(`/rooms/${room.id}/start`, 'POST', { durationMinutes: 10 }, 409);
+  await teacher.request(`/candidates/${registered.candidate.id}/invitations`, 'POST', { roomId: room.id });
+});
+
 test('English result appears only after submission for the participant and teacher', async t => {
   const englishTeachers = [{ ...teachers[0], tracks: [...teachers[0].tracks, 'english'] }, teachers[1]];
   const { teacher, client } = await fixture(t, englishTeachers);
